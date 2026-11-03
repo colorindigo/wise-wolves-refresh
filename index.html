@@ -160,7 +160,7 @@
     <button class="btn secondary only-narrow" id="open-panel">Параметры</button>
   </div>
   <p class="hint" id="hint-wave">Тяни экран вниз мышью или двумя пальцами на тачпаде. Цифры по&nbsp;очереди размываются, опускаются и&nbsp;гаснут. На&nbsp;пороге 80&nbsp;pt уходит последняя — и&nbsp;сразу&nbsp;смена.</p>
-  <p class="hint" id="hint-v1" hidden>Тяни экран вниз мышью или двумя пальцами на тачпаде. Цифры уходят справа по&nbsp;одной, как в&nbsp;motion&nbsp;v1 из&nbsp;Figma. На&nbsp;пороге 80&nbsp;pt остаются «$» и&nbsp;«.00», и&nbsp;новая сумма набирается по&nbsp;цифре.</p>
+  <p class="hint" id="hint-v1" hidden>Тяни экран вниз мышью или двумя пальцами на тачпаде. Цифры уходят справа по&nbsp;одной, как в&nbsp;motion&nbsp;v1 из&nbsp;Figma. На&nbsp;пороге 80&nbsp;pt «$» и&nbsp;«.00» мерцают, как скелетон контента, а&nbsp;через секунду новая сумма набирается по&nbsp;цифре.</p>
 </div>
 
 <aside class="panel" id="panel">
@@ -187,7 +187,7 @@
   // ── Параметры. DEFAULTS — значения рефа transitions.dev/number-pop-in, снятые с их страницы 20.10.2026.
   // Появление было эффектом рефа (500 мс → 333 → 222, шаг 40 → 27 → 18 по просьбам владельца); затем владелец заменил его
   // копией ухода наоборот (revealDur, reveal). Размытие, шум, ход и отрезок у ухода и появления общие.
-  const DEFAULTS = { anim: 'wave', v1Pause: 250, load: 2000, speed: 1, revealDur: 700, reveal: 'mirror', land: 'fast',
+  const DEFAULTS = { anim: 'wave', v1Pause: 1000, load: 2000, speed: 1, revealDur: 700, reveal: 'mirror', land: 'fast',
                     peak: 6, fadeFrom: 50, drop: 12, span: 40, order: 'ltr', dim: 'off', noise: 60, grainFps: 24, barLen: 50, barSpeed: 2 };   // со строки peak — сценарий оттяжки, не реф
   const REVEAL = 'cubic-bezier(0.4, 0, 0.2, 1)';        // затухание полоски на смене
   if (new URLSearchParams(location.search).get('anim') === 'v1') DEFAULTS.anim = 'v1';   // ссылка сразу на режим v1
@@ -422,8 +422,10 @@
     if (P.anim === 'v1') {                                   // motion v1: пусто 0.25 с, затем набор по цифре по времени
       state = 'loading'; armed = false;
       v1Exit(1);
+      const pulses = v1Pulse();
       await wait(T(P.v1Pause));
       state = 'swapping';
+      v1PulseStop(pulses);
       await v1Grow();
       state = 'idle';
       render();
@@ -494,6 +496,20 @@
   //   внутри шага — та же кривая Smart Animate. Набор идёт по времени, как в кадрах.
   const V1_OUT = bezier(0.4, 0, 0.2, 1), V1_IN = bezier(0.16, 0.84, 0.3, 1);
   const V1_STEP_IN = 100, V1_DELAY = 10;
+  // Пока суммы нет, «$» и «.00» мерцают как скелетон контента (владелец 3.11.2026: «доллар и .00 начинает анимировать как
+  // скелетон в контенте, через 1 секунду новая сумма выезжает»). Ключи сняты с `loading / preloader` 20645:20907, слои
+  // `Skeleton section` — прозрачность 1 → 0.4 за 0.7 с (0.5, 0, 0.5, 1), обратно к 1 за 0.7 с (ease-in-out), все в такт.
+  const V1_PULSE = 1400;
+  const v1Pulse = () => [cur, decEl].map(el => el.animate([
+    { opacity: 1, easing: 'cubic-bezier(0.5, 0, 0.5, 1)' },
+    { opacity: 0.4, offset: 0.5, easing: 'ease-in-out' },
+    { opacity: 1 },
+  ], { duration: T(V1_PULSE), iterations: Infinity }));
+  // Набор начинается по времени, а мерцание доигрывает свой цикл до 1 и останавливается — без скачка прозрачности.
+  const v1PulseStop = list => list.forEach(a => {
+    const d = a.effect.getTiming().duration;
+    a.effect.updateTiming({ iterations: Math.max(1, Math.ceil((a.currentTime || 0) / d)) });
+  });
   const shrinkLens = str => {                               // 2,234,920 → [9, 8, 7, 5, 4, 3, 1, 0]
     const out = [str.length]; let L = str.length;
     while (L > 0) { L--; while (L > 0 && str[L - 1] === ',') L--; out.push(L); }
@@ -582,7 +598,7 @@
     ['g-flow', 'span', 'Ход одной цифры', 10, 100, 5, v => v + ' % оттяжки'],
     ['g-flow', 'fadeFrom', 'Цифра гаснет с', 0, 100, 5, v => v + ' % своего хода'],
     ['g-flow', 'load', 'Загрузка данных', 0, 4000, 100, v => (v / 1000).toFixed(1) + ' с'],
-    ['g-effect', 'v1Pause', 'Пауза перед набором · v1', 0, 1500, 50, v => (v / 1000).toFixed(2) + ' с'],
+    ['g-effect', 'v1Pause', 'Скелетон до набора · v1', 0, 3000, 50, v => (v / 1000).toFixed(2) + ' с'],
   ];
   const segs = [
     ['g-effect', 'anim', 'Анимация', [['wave', 'Волна'], ['v1', 'По цифре · v1']]],
