@@ -237,7 +237,7 @@
   // ── Параметры. DEFAULTS — значения рефа transitions.dev/number-pop-in, снятые с их страницы 20.10.2026.
   // Появление было эффектом рефа (500 мс → 333 → 222, шаг 40 → 27 → 18 по просьбам владельца); затем владелец заменил его
   // копией ухода наоборот (revealDur, reveal). Размытие, шум, ход и отрезок у ухода и появления общие.
-  const DEFAULTS = { anim: 'v1', v1Pause: 3000, v1GrowSpeed: 1.5, labelsDur: 800, labelsRise: 12, load: 2000, speed: 1, revealDur: 700, reveal: 'mirror', land: 'fast',
+  const DEFAULTS = { anim: 'v1', v1Pause: 3000, v1GrowSpeed: 1.5, labelsDur: 800, labelsRise: 12, labelsStep: 100, labelsOrder: 'clock', load: 2000, speed: 1, revealDur: 700, reveal: 'mirror', land: 'fast',
                     peak: 6, fadeFrom: 50, drop: 12, span: 40, order: 'ltr', dim: 'off', noise: 60, grainFps: 24, barLen: 50, barSpeed: 2 };   // со строки peak — сценарий оттяжки, не реф
   const REVEAL = 'cubic-bezier(0.4, 0, 0.2, 1)';        // затухание полоски на смене
   if (new URLSearchParams(location.search).get('anim') === 'v1') DEFAULTS.anim = 'v1';   // ссылка сразу на режим v1
@@ -622,21 +622,43 @@
   // уход (1, 0, 0.28, 1), проявление (0.72, 0, 0, 1).
   // Подписи и проценты (владелец 3.11.2026: «проявление заголовков и процентов из фейда снизу и плавно с нашими изингами»):
   // при оттяжке гаснут вместе с цветами, на смене поднимаются на место из фейда за labelsDur, тоже по (0.72, 0, 0, 1).
+  // Владелец следом: «подписи появляются по очереди, а не все сразу». Слой подписей режется на пять групп «название + процент»
+  // (границы — по прозрачности картинки, запас 6 pt на сглаживание), каждая поднимается со сдвигом labelsStep.
   const chartZero = $('chart-zero'), pz = $('pz'), labelsEl = $('chart-labels');
-  const setLabels = (o, y) => { labelsEl.style.opacity = o < 1e-4 ? '0' : o >= 1 ? '' : o.toFixed(4); labelsEl.style.transform = y ? `translate3d(0, ${y.toFixed(2)}px, 0)` : ''; };
+  const LABEL_PARTS = {                                     // x0, y0, x1, y1 в pt от слоя подписей 403 × 260
+    cash: [260, 0, 306, 37], crypto: [304, 135, 358, 174], pm: [146, 224, 254, 260], pe: [44, 143, 99, 195], brokerage: [71, 0, 146, 37],
+  };
+  const LABEL_ORDER = { clock: ['cash', 'crypto', 'pm', 'pe', 'brokerage'], rows: ['brokerage', 'cash', 'crypto', 'pe', 'pm'] };
+  const LW = 1210 / 3, LH = 260, labelParts = {};
+  Object.entries(LABEL_PARTS).forEach(([k, [x0, y0, x1, y1]]) => {
+    const im = labelsEl.cloneNode(); im.removeAttribute('id'); im.dataset.part = k;
+    im.style.clipPath = `inset(${y0}px ${(LW - x1).toFixed(2)}px ${LH - y1}px ${x0}px)`;
+    labelsEl.parentNode.insertBefore(im, labelsEl); labelParts[k] = im;
+  });
+  labelsEl.style.display = 'none';
+  const setPart = (el, o, y) => { el.style.opacity = o < 1e-4 ? '0' : o >= 1 ? '' : o.toFixed(4); el.style.transform = y ? `translate3d(0, ${y.toFixed(2)}px, 0)` : ''; };
+  const setLabels = (o, y) => Object.values(labelParts).forEach(el => setPart(el, o, y));
   const CHART_OUT = bezier(1, 0, 0.28, 1), CHART_IN = bezier(0.72, 0, 0, 1);
   let chartK = 0, chartRaf = 0, chartRevealing = false;
   const setChart = k => { chartK = k; chartZero.style.opacity = k < 1e-4 ? '0' : k.toFixed(4); };
   const ringsStop = () => { try { pz.pauseAnimations(); pz.setCurrentTime(0); } catch (e) {} };
   const ringsPlay = () => { try { pz.setCurrentTime(0); pz.unpauseAnimations(); } catch (e) {} };
+  // На смене кольца замирают в тёмной паузе цикла. Цикл прелоадера 3 с — ровно загрузка, поэтому на смене стартовал следующий
+  // проход, и крайнее кольцо вспыхивало белым поверх проявляющегося графика (владелец: «какой белый артефакт появляется при
+  // завершении загрузки»). Проход гаснет к 2.175 с — в покое между 2.2 и 3 с все кольца тёмные.
+  const ringsHold = () => { try { const t = pz.getCurrentTime() % 3; pz.pauseAnimations(); if (t < 0.3 || t > 2.2) pz.setCurrentTime(2.5); } catch (e) {} };
   ringsStop();
   const revealChart = D => {
-    cancelAnimationFrame(chartRaf); chartRevealing = true;
-    const k0 = chartK, t0 = performance.now(), DL = T(P.labelsDur);
+    cancelAnimationFrame(chartRaf); chartRevealing = true; ringsHold();
+    const k0 = chartK, t0 = performance.now(), DL = T(P.labelsDur), order = LABEL_ORDER[P.labelsOrder] || LABEL_ORDER.clock;
     const tick = now => {
-      const f = Math.min((now - t0) / D, 1), g = Math.min((now - t0) / DL, 1), e = CHART_IN(g);
+      const f = Math.min((now - t0) / D, 1);
       setChart(k0 * (1 - CHART_IN(f)));
-      setLabels(e, P.labelsRise * (1 - e));
+      let g = 1;
+      order.forEach((k, i) => {
+        g = Math.min(Math.max((now - t0 - T(i * P.labelsStep)) / DL, 0), 1);
+        const e = CHART_IN(g); setPart(labelParts[k], e, P.labelsRise * (1 - e));
+      });
       if (f < 1 || g < 1) chartRaf = requestAnimationFrame(tick); else { chartRevealing = false; ringsStop(); }
     };
     chartRaf = requestAnimationFrame(tick);
@@ -710,9 +732,11 @@
     ['g-effect', 'v1GrowSpeed', 'Скорость набора · v1', 0.5, 4, 0.25, v => '×' + v],
     ['g-effect', 'labelsDur', 'Проявление подписей · v1', 200, 2000, 50, v => v + ' мс'],
     ['g-effect', 'labelsRise', 'Подъём подписей · v1', 0, 40, 1, v => v + ' pt'],
+    ['g-effect', 'labelsStep', 'Шаг подписей · v1', 0, 300, 10, v => v + ' мс'],
   ];
   const segs = [
     ['g-effect', 'anim', 'Анимация', [['wave', 'Волна'], ['v1', 'По цифре · v1']]],
+    ['g-effect', 'labelsOrder', 'Порядок подписей · v1', [['clock', 'По часовой'], ['rows', 'Сверху вниз']]],
     ['g-effect', 'reveal', 'Как появляется', [['mirror', 'Зеркало ухода'], ['rewind', 'Перемотка']]],
     ['g-effect', 'land', 'Посадка', [['fast', 'С ускорением'], ['linear', 'Ровная']]],
     ['g-flow', 'order', 'Порядок цифр', [['ltr', 'Слева'], ['rtl', 'Справа'], ['collapse', 'К центру'], ['random', 'Вразброс']]],
