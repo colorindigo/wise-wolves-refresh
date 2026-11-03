@@ -62,6 +62,10 @@
   .ch  { display: inline-block; flex: none; white-space: pre; will-change: transform, opacity, filter; }
   .cur, .int, .dec { flex: none; }
   .ghost { position: absolute; inset: 0; pointer-events: none; }
+  /* Режим «По цифре · v1»: строка суммы раскладывается по шагам из Figma, поэтому знаки стоят абсолютно
+     (те же коробки: число — верх 0, «$» и «.00» — верх 15 внутри .amount). */
+  .amount.v1 .cur, .amount.v1 .dec { position: absolute; top: 15px; margin: 0; }
+  .amount.v1 .int .ch { position: absolute; top: 0; }
   .scroller .loadbar { position: absolute; left: 0; top: 136px; width: 390px; height: 40px; overflow: visible; pointer-events: none; opacity: 0; }
   #loadbar-rect { fill: var(--text-primary); }
   .ghost .ch { position: absolute; top: 0; }
@@ -155,7 +159,8 @@
     <button class="btn primary" id="simulate" title="Сыграть жест: потянуть до порога и отпустить">Обновить</button>
     <button class="btn secondary only-narrow" id="open-panel">Параметры</button>
   </div>
-  <p class="hint">Тяни экран вниз мышью или двумя пальцами на тачпаде. Цифры по&nbsp;очереди размываются, опускаются и&nbsp;гаснут. На&nbsp;пороге 80&nbsp;pt уходит последняя — и&nbsp;сразу&nbsp;смена.</p>
+  <p class="hint" id="hint-wave">Тяни экран вниз мышью или двумя пальцами на тачпаде. Цифры по&nbsp;очереди размываются, опускаются и&nbsp;гаснут. На&nbsp;пороге 80&nbsp;pt уходит последняя — и&nbsp;сразу&nbsp;смена.</p>
+  <p class="hint" id="hint-v1" hidden>Тяни экран вниз мышью или двумя пальцами на тачпаде. Цифры уходят справа по&nbsp;одной, как в&nbsp;motion&nbsp;v1 из&nbsp;Figma. На&nbsp;пороге 80&nbsp;pt остаются «$» и&nbsp;«.00», и&nbsp;новая сумма набирается по&nbsp;цифре.</p>
 </div>
 
 <aside class="panel" id="panel">
@@ -182,9 +187,10 @@
   // ── Параметры. DEFAULTS — значения рефа transitions.dev/number-pop-in, снятые с их страницы 20.10.2026.
   // Появление было эффектом рефа (500 мс → 333 → 222, шаг 40 → 27 → 18 по просьбам владельца); затем владелец заменил его
   // копией ухода наоборот (revealDur, reveal). Размытие, шум, ход и отрезок у ухода и появления общие.
-  const DEFAULTS = { load: 2000, speed: 1, revealDur: 700, reveal: 'mirror', land: 'fast',
+  const DEFAULTS = { anim: 'wave', v1Pause: 250, load: 2000, speed: 1, revealDur: 700, reveal: 'mirror', land: 'fast',
                     peak: 6, fadeFrom: 50, drop: 12, span: 40, order: 'ltr', dim: 'off', noise: 60, grainFps: 24, barLen: 50, barSpeed: 2 };   // со строки peak — сценарий оттяжки, не реф
   const REVEAL = 'cubic-bezier(0.4, 0, 0.2, 1)';        // затухание полоски на смене
+  if (new URLSearchParams(location.search).get('anim') === 'v1') DEFAULTS.anim = 'v1';   // ссылка сразу на режим v1
   const P = { ...DEFAULTS };
   const T = ms => ms / P.speed;
 
@@ -206,7 +212,7 @@
     step++;
     if (step === 1) return 223648000;                       // то же 2,234,920 → 2,236,480, что в Main · refreshing · motion v1
     const r = 1 + (Math.random() * 0.007 - 0.003);           // дальше — примерные значения, ±0.3–0.4%
-    return Math.round(cents * r);
+    return P.anim === 'v1' ? Math.round(cents * r / 100) * 100 : Math.round(cents * r);   // в v1 центы всегда .00, как в кадрах
   };
   const charSpan = (ch, cls) => { const s = document.createElement('span'); s.className = 'ch ' + cls; s.textContent = ch; return s; };
   const fill = (el, str, cls) => { el.replaceChildren(...[...str].map(ch => charSpan(ch, cls))); };
@@ -232,7 +238,7 @@
   const layoutRow = () => { layoutGroup(intEl, 'i'); layoutGroup(decEl, 'd'); cur.style.width = Math.ceil(measure('$', 'c')) + 'px'; };
 
   const v0 = fmt(cents); fill(intEl, v0.i, 'i'); fill(decEl, v0.d, 'd');
-  document.fonts.ready.then(layoutRow);
+  document.fonts.ready.then(() => { layoutRow(); applyMode(); });
 
   const rgb = c => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
   const mix = (a, b, t) => a.map((x, k) => Math.round(x + (b[k] - x) * t));
@@ -301,6 +307,13 @@
   const render = () => {
     scroller.style.transform = `translate3d(0, ${pull - scroll}px, 0)`;
     if (state !== 'idle') return;
+    if (P.anim === 'v1') {                                   // уход по цифре ведёт оттяжка, без размытия и шума
+      if (!armed) { if (pull < 1) armed = true; v1Exit(0); return; }
+      const p1 = Math.min(pull / THRESH, 1);
+      v1Exit(p1);
+      if (p1 >= 1) startRefresh();
+      return;
+    }
     if (!armed) { if (pull < 1) armed = true; glyphs().forEach(el => setGlyph(el, REST)); setGrain(false); setIntColor(WHITE); return; }
     const p = Math.min(pull / THRESH, 1);
     setGrain(p > 0);
@@ -406,6 +419,16 @@
   };
 
   async function startRefresh() {
+    if (P.anim === 'v1') {                                   // motion v1: пусто 0.25 с, затем набор по цифре по времени
+      state = 'loading'; armed = false;
+      v1Exit(1);
+      await wait(T(P.v1Pause));
+      state = 'swapping';
+      await v1Grow();
+      state = 'idle';
+      render();
+      return;
+    }
     state = 'loading'; armed = false;
     setGrain(true);
     waveAt(1);
@@ -463,6 +486,81 @@
     setGrain(false);
   }
 
+  // ── Режим «По цифре · v1» — секция Figma «Main · refreshing · motion v1» (20509:16952), значения прочитаны из файла 3.11.2026:
+  //   уход — 7 шагов: пропадает последний знак справа (запятая — вместе с цифрой), остальные тускнеют и строка
+  //   центруется; Smart Animate 0.16 с, (0.4, 0, 0.2, 1). Пусто — 0.25 с. Набор — 7 шагов по 0.01 + 0.10 с,
+  //   (0.16, 0.84, 0.3, 1), новый знак проявляется на своём месте. Тон числа — 0x31 + (0xFF − 0x31) × длина / полная.
+  //   Владелец: «и анимация оттягивалась от тяги экрана» — поэтому уход ведёт оттяжка: шаг на 1/7 пути до порога,
+  //   внутри шага — та же кривая Smart Animate. Набор идёт по времени, как в кадрах.
+  const V1_OUT = bezier(0.4, 0, 0.2, 1), V1_IN = bezier(0.16, 0.84, 0.3, 1);
+  const V1_STEP_IN = 100, V1_DELAY = 10;
+  const shrinkLens = str => {                               // 2,234,920 → [9, 8, 7, 5, 4, 3, 1, 0]
+    const out = [str.length]; let L = str.length;
+    while (L > 0) { L--; while (L > 0 && str[L - 1] === ',') L--; out.push(L); }
+    return out;
+  };
+  const toneOf = (len, full) => { const c = Math.round(0x31 + (0xFF - 0x31) * len / full); return [c, c, c]; };
+  const layoutOf = (str, decStr) => {                       // Figma: «$» + 4 + коробка числа + центы, по центру 195
+    const xs = []; let prev = 0;
+    for (let n = 0; n < str.length; n++) { xs.push(prev); prev = measure(str.slice(0, n + 1), 'i'); }
+    const box = str.length ? Math.ceil(prev - LS.i) : 0;
+    const wCur = Math.ceil(measure('$', 'c')), wDec = Math.ceil(measure(decStr, 'd'));
+    const left = 195 - (wCur + 4 + box + wDec) / 2, numX = left + wCur + 4;
+    return { cur: left, dec: numX + box, xs: xs.map(x => numX + x) };
+  };
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const v1Paint = (chars, str, decStr, lenA, lenB, f, enter) => {
+    const A = layoutOf(str.slice(0, lenA), decStr), B = layoutOf(str.slice(0, lenB), decStr), full = str.length;
+    const cA = toneOf(lenA, full), cB = toneOf(lenB, full);
+    cur.style.left = lerp(A.cur, B.cur, f) + 'px';
+    decEl.style.left = lerp(A.dec, B.dec, f) + 'px';
+    chars.forEach((el, i) => {
+      if (i < Math.min(lenA, lenB)) {                       // знак есть в обоих состояниях: едет и меняет тон
+        el.style.left = lerp(A.xs[i], B.xs[i], f) + 'px'; el.style.opacity = '1'; el.style.color = rgb(mix(cA, cB, f));
+      } else if (!enter && i < lenA) {                      // уходящий: гаснет на месте, в своём тоне
+        el.style.left = A.xs[i] + 'px'; el.style.opacity = String(1 - f); el.style.color = rgb(cA);
+      } else if (enter && i < lenB) {                       // приходящий: проявляется на своём новом месте
+        el.style.left = B.xs[i] + 'px'; el.style.opacity = String(f); el.style.color = rgb(cB);
+      } else el.style.opacity = '0';
+    });
+  };
+  const v1Strings = () => { const v = fmt(cents); return { str: v.i, dec: v.d }; };
+  const v1Exit = p => {                                     // p — доля пути до порога, 0…1
+    amount.classList.add('v1');
+    const { str, dec } = v1Strings(), lens = shrinkLens(str), n = lens.length - 1;
+    const e = Math.min(Math.max(p, 0), 1) * n, k = Math.min(Math.floor(e), n - 1), f = e >= n ? 1 : e - k;
+    v1Paint([...intEl.children], str, dec, lens[k], lens[k + 1], V1_OUT(f), false);
+  };
+  async function v1Grow() {
+    cents = nextValue();
+    const { str, dec } = v1Strings();
+    fill(intEl, str, 'i'); fill(decEl, dec, 'd'); layoutRow();
+    const lens = shrinkLens(str).reverse();                 // [0, 1, 3, 4, 5, 7, 8, 9]
+    const chars = [...intEl.children];
+    for (let k = 0; k < lens.length - 1; k++) {
+      await wait(T(V1_DELAY));
+      const t0 = performance.now(), D = T(V1_STEP_IN);
+      await new Promise(done => {
+        const tick = now => {
+          const f = Math.min((now - t0) / D, 1);
+          v1Paint(chars, str, dec, lens[k], lens[k + 1], V1_IN(f), true);
+          if (f < 1) requestAnimationFrame(tick); else done();
+        };
+        requestAnimationFrame(tick);
+      });
+    }
+    chars.forEach(el => { el.style.color = ''; });          // покой: тон снова у строки
+  }
+  // Переключение режима: v1 держит строку раскладкой по шагам, волна — обычной строкой.
+  function applyMode() {
+    const els = [cur, decEl, ...intEl.children];
+    $('hint-wave').hidden = P.anim === 'v1'; $('hint-v1').hidden = P.anim !== 'v1';
+    if (P.anim === 'v1') { glyphs().forEach(el => setGlyph(el, REST)); setGrain(false); v1Exit(0); return; }
+    amount.classList.remove('v1');
+    els.forEach(el => { el.style.left = ''; el.style.opacity = ''; el.style.color = ''; });
+    layoutRow(); render();
+  }
+
   // Кнопка: тот же жест, сыгранный за пользователя.
   const simulate = () => {
     if (state !== 'idle') return;
@@ -484,8 +582,10 @@
     ['g-flow', 'span', 'Ход одной цифры', 10, 100, 5, v => v + ' % оттяжки'],
     ['g-flow', 'fadeFrom', 'Цифра гаснет с', 0, 100, 5, v => v + ' % своего хода'],
     ['g-flow', 'load', 'Загрузка данных', 0, 4000, 100, v => (v / 1000).toFixed(1) + ' с'],
+    ['g-effect', 'v1Pause', 'Пауза перед набором · v1', 0, 1500, 50, v => (v / 1000).toFixed(2) + ' с'],
   ];
   const segs = [
+    ['g-effect', 'anim', 'Анимация', [['wave', 'Волна'], ['v1', 'По цифре · v1']]],
     ['g-effect', 'reveal', 'Как появляется', [['mirror', 'Зеркало ухода'], ['rewind', 'Перемотка']]],
     ['g-effect', 'land', 'Посадка', [['fast', 'С ускорением'], ['linear', 'Ровная']]],
     ['g-flow', 'order', 'Порядок цифр', [['ltr', 'Слева'], ['rtl', 'Справа'], ['collapse', 'К центру'], ['random', 'Вразброс']]],
@@ -509,7 +609,7 @@
     const seg = f.querySelector('.seg');
     const btns = opts.map(([val, text]) => {
       const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = text;
-      bt.addEventListener('click', () => { P[key] = val; upd(); });
+      bt.addEventListener('click', () => { P[key] = val; upd(); if (key === 'anim' && state === 'idle') applyMode(); });
       seg.appendChild(bt); return [bt, val];
     });
     const upd = () => btns.forEach(([bt, val]) => bt.setAttribute('aria-pressed', String(P[key] === val)));
@@ -557,7 +657,7 @@
   if (window.visualViewport) visualViewport.addEventListener('resize', fit);   // Safari прячет и показывает свои панели
   render();
 
-  window.__refreshRig = { P, get state() { return state; }, swap, startRefresh };
+  window.__refreshRig = { P, get state() { return state; }, swap, startRefresh, v1Exit, v1Grow, applyMode, layoutOf, shrinkLens };
 })();
 </script>
 </body>
