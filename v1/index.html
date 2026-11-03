@@ -187,7 +187,7 @@
   // ── Параметры. DEFAULTS — значения рефа transitions.dev/number-pop-in, снятые с их страницы 20.10.2026.
   // Появление было эффектом рефа (500 мс → 333 → 222, шаг 40 → 27 → 18 по просьбам владельца); затем владелец заменил его
   // копией ухода наоборот (revealDur, reveal). Размытие, шум, ход и отрезок у ухода и появления общие.
-  const DEFAULTS = { anim: 'v1', v1Pause: 3000, load: 2000, speed: 1, revealDur: 700, reveal: 'mirror', land: 'fast',
+  const DEFAULTS = { anim: 'v1', v1Pause: 3000, v1GrowSpeed: 1.5, load: 2000, speed: 1, revealDur: 700, reveal: 'mirror', land: 'fast',
                     peak: 6, fadeFrom: 50, drop: 12, span: 40, order: 'ltr', dim: 'off', noise: 60, grainFps: 24, barLen: 50, barSpeed: 2 };   // со строки peak — сценарий оттяжки, не реф
   const REVEAL = 'cubic-bezier(0.4, 0, 0.2, 1)';        // затухание полоски на смене
   if (new URLSearchParams(location.search).get('anim') === 'v1') DEFAULTS.anim = 'v1';   // ссылка сразу на режим v1
@@ -577,8 +577,8 @@
     const lens = shrinkLens(str).reverse();                 // [0, 1, 3, 4, 5, 7, 8, 9]
     const chars = [...intEl.children];
     for (let k = 0; k < lens.length - 1; k++) {
-      await wait(T(V1_DELAY));
-      const t0 = performance.now(), D = T(V1_STEP_IN);
+      await wait(T(V1_DELAY / P.v1GrowSpeed));                // владелец 3.11.2026: «сделай проявление новой суммы быстрее» → ×1.5
+      const t0 = performance.now(), D = T(V1_STEP_IN / P.v1GrowSpeed);
       await new Promise(done => {
         const tick = now => {
           const f = Math.min((now - t0) / D, 1);
@@ -622,6 +622,7 @@
     ['g-flow', 'fadeFrom', 'Цифра гаснет с', 0, 100, 5, v => v + ' % своего хода'],
     ['g-flow', 'load', 'Загрузка данных', 0, 4000, 100, v => (v / 1000).toFixed(1) + ' с'],
     ['g-effect', 'v1Pause', 'Загрузка · v1', 0, 6000, 100, v => (v / 1000).toFixed(1) + ' с'],
+    ['g-effect', 'v1GrowSpeed', 'Скорость набора · v1', 0.5, 4, 0.25, v => '×' + v],
   ];
   const segs = [
     ['g-effect', 'anim', 'Анимация', [['wave', 'Волна'], ['v1', 'По цифре · v1']]],
